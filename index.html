@@ -34,8 +34,85 @@ $('active').onchange=()=>{current=$('active').value;renderCues()};
 $('files').onchange=()=>{const chosen=[...$('files').files];if(chosen.length>5){say('Choose no more than five files per batch.');$('files').value='';return}const invalid=chosen.find(f=>f.size>MAX);if(invalid){say(invalid.name+' exceeds the 100 MB per-file limit.');$('files').value='';return}jobs=chosen.map(file=>({file,status:'Queued'}));renderQueue();say(chosen.length+' file(s) queued. They will run sequentially.');};
 async function getAudioDuration(file){return new Promise((resolve,reject)=>{const audio=document.createElement('audio'),url=URL.createObjectURL(file),timer=setTimeout(()=>{URL.revokeObjectURL(url);reject(Error('AUDIO_METADATA_TIMEOUT: Could not read audio duration.'))},15000);audio.preload='metadata';audio.onloadedmetadata=()=>{clearTimeout(timer);const d=audio.duration;URL.revokeObjectURL(url);if(!Number.isFinite(d)||d<=0)reject(Error('AUDIO_DURATION_UNKNOWN: Could not determine recording length.'));else resolve(d)};audio.onerror=()=>{clearTimeout(timer);URL.revokeObjectURL(url);reject(Error('AUDIO_METADATA_FAILED: Safari could not read this audio format.'))};audio.src=url})}
 function parseWorkerTime(v){if(typeof v==='number')return v;const n=Number(v);return Number.isFinite(n)?n:0}
-function cuesFromChunk(data,index,count,duration){const offset=duration*index/count,span=duration/count,segments=Array.isArray(data.segments)?data.segments:[];const cues=[];for(const seg of segments){const text=String(seg.text||'').trim();if(!text)continue;const a=parseWorkerTime(seg.start??seg.timestamp?.[0]),b=parseWorkerTime(seg.end??seg.timestamp?.[1]);const start=offset+Math.max(0,a),end=offset+Math.max(a+0.25,b);cues.push({start:Math.round(start*1000),end:Math.round(Math.min(duration,end)*1000),text})}if(!cues.length){const text=String(data.text||'').trim();if(text)cues.push({start:Math.round(offset*1000),end:Math.round(Math.min(duration,offset+span)*1000),text})}return cues}
-async function transcribe(job){const base=$('workerurl').value.trim().replace(/\/+$/,'');if(!/^https:\/\//i.test(base))throw Error('WORKER_URL_MISSING: Paste your deployed Cloudflare Worker URL into the Cloudflare AI Worker URL field.');job.stage='checking Cloudflare connection';diag('WORKER: checking '+base+'/health');const health=await fetch(base+'/health',{method:'GET'});if(!health.ok)throw Error('WORKER_HEALTH_FAILED: HTTP '+health.status+' from '+base+'/health');const healthData=await health.json();if(!healthData.ok)throw Error('WORKER_HEALTH_INVALID: '+JSON.stringify(healthData));diag('WORKER CONNECTED: '+healthData.model);job.stage='reading audio metadata';const duration=await getAudioDuration(job.file);const chunkSize=1024*1024,total=Math.ceil(job.file.size/chunkSize),out=[];diag('REMOTE JOB: '+job.file.name+' · '+duration.toFixed(1)+'s · '+total+' chunks');for(let i=0;i<total;i++){job.stage='Cloudflare transcription chunk '+(i+1)+'/'+total;const blob=job.file.slice(i*chunkSize,Math.min((i+1)*chunkSize,job.file.size));say('Cloudflare AI is transcribing '+job.file.name+' · chunk '+(i+1)+' of '+total);diag('UPLOAD: '+job.file.name+' chunk '+(i+1)+'/'+total+' ('+blob.size+' bytes)');const response=await fetch(base+'/transcribe-chunk',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Chunk-Index':String(i),'X-Chunk-Count':String(total),'X-Audio-Name':encodeURIComponent(job.file.name),'X-Task':$('translate').checked?'translate':'transcribe','X-Duration':String(duration)},body:blob});let data;try{data=await response.json()}catch{throw Error('WORKER_BAD_RESPONSE: HTTP '+response.status+' returned non-JSON data.')}if(!response.ok||!data.ok)throw Error('CLOUDFLARE_AI_ERROR: '+(data.error||response.status)+' · '+(data.message||response.statusText));const cues=cuesFromChunk(data,i,total,duration);out.push(...cues);diag('CHUNK COMPLETE: '+(i+1)+'/'+total+' · '+cues.length+' cues · '+(data.wordCount||0)+' words');$('bar').style.width=Math.round((i+1)/total*100)+'%'}if(!out.length)throw Error('NO_TRANSCRIPT: Cloudflare returned no subtitle text. Check that the audio contains speech.');out.sort((a,b)=>a.start-b.start);diag('REMOTE TRANSCRIPTION COMPLETE: '+out.length+' cue(s)');return out}
+function mp3Chunks(file){
+  const bytes=new Uint8Array(file.size);
+  return file.arrayBuffer().then(buffer=>{
+    const data=new Uint8Array(buffer);let pos=0;
+    if(data.length>=10&&String.fromCharCode(...data.slice(0,3))==='ID3'){
+      const size=(data[6]<<21)|(data[7]<<14)|(data[8]<<7)|data[9];pos=Math.min(data.length,10+size);
+    }
+    const frames=[];let skipped=0;
+    const mpeg1=[0,32,40,48,56,64,80,96,112,128,160,192,224,256,320];
+    const mpeg2=[0,8,16,24,32,40,48,56,64,80,96,112,128,144,160];
+    while(pos+4<=data.length){
+      const h=(data[pos]*0x1000000)+(data[pos+1]<<16)+(data[pos+2]<<8)+data[pos+3];
+      if((h>>>21)!==0x7ff){pos++;if(++skipped>4096&&frames.length===0)throw Error('MP3_INVALID: Could not locate valid MP3 audio frames.');continue}
+      const version=(h>>>19)&3,layer=(h>>>17)&3,bitrateIndex=(h>>>12)&15,sampleIndex=(h>>>10)&3,padding=(h>>>9)&1;
+      if(version===1||layer!==1||bitrateIndex===0||bitrateIndex===15||sampleIndex===3){pos++;continue}
+      const rates=[44100,48000,32000];let rate=rates[sampleIndex];if(version===2)rate/=2;else if(version===0)rate/=4;
+      const bitrate=(version===3?mpeg1:mpeg2)[bitrateIndex]*1000;
+      const frameLength=Math.floor((version===3?144:72)*bitrate/rate)+padding;
+      if(frameLength<24||pos+frameLength>data.length){pos++;continue}
+      const seconds=(version===3?1152:576)/rate;
+      frames.push({start:pos,end:pos+frameLength,duration:seconds});pos+=frameLength;skipped=0;
+    }
+    if(!frames.length)throw Error('MP3_UNSUPPORTED: This file does not contain a supported MP3 audio stream.');
+    const chunks=[];let first=0,last=0,duration=0,chunkStart=0;
+    for(let i=0;i<frames.length;i++){
+      const frame=frames[i],frameDuration=frame.duration;
+      if(i>first&&(duration+frameDuration>15||frame.end-frames[first].start>900000)){
+        chunks.push({start:frames[first].start,end:frames[i-1].end,startSeconds:chunkStart,duration});
+        chunkStart+=duration;first=i;duration=0;
+      }
+      duration+=frameDuration;last=i;
+    }
+    if(last>=first)chunks.push({start:frames[first].start,end:frames[last].end,startSeconds:chunkStart,duration});
+    return {data,chunks,totalDuration:frames.reduce((s,x)=>s+x.duration,0)};
+  });
+}
+function bytesToBase64(bytes){
+  let binary='';const step=0x8000;
+  for(let i=0;i<bytes.length;i+=step)binary+=String.fromCharCode(...bytes.subarray(i,Math.min(i+step,bytes.length)));
+  return btoa(binary);
+}
+function cuesFromChunk(data,offset,duration){
+  const segments=Array.isArray(data.segments)?data.segments:[],cues=[];
+  for(const seg of segments){
+    const text=String(seg.text||'').trim();if(!text)continue;
+    const a=parseWorkerTime(seg.start??seg.timestamp?.[0]),b=parseWorkerTime(seg.end??seg.timestamp?.[1]);
+    cues.push({start:Math.round((offset+Math.max(0,a))*1000),end:Math.round(Math.min(offset+duration,offset+Math.max(a+0.25,b))*1000),text});
+  }
+  if(!cues.length){const text=String(data.text||'').trim();if(text)cues.push({start:Math.round(offset*1000),end:Math.round((offset+duration)*1000),text});}
+  return cues;
+}
+async function transcribe(job){
+  const base=$('workerurl').value.trim().replace(/\\/+$/,'');
+  if(!/^https:\\/\\//i.test(base))throw Error('WORKER_URL_MISSING: The transcription service is not connected yet. A Cloudflare Worker URL is required.');
+  if(!/\\.mp3(?:$|\\?)/i.test(job.file.name))throw Error('FORMAT_NOT_SUPPORTED: Reliable remote chunking currently supports MP3 files. Please use an MP3 export.');
+  job.stage='checking transcription service';diag('WORKER: checking '+base+'/health');
+  let health;try{health=await fetch(base+'/health',{method:'GET'});}catch(e){throw Error('WORKER_CONNECTION_FAILED: Could not reach the transcription service. Check its URL and deployment. '+e.message)}
+  if(!health.ok)throw Error('WORKER_HEALTH_FAILED: Service returned HTTP '+health.status+'.');
+  const healthData=await health.json();if(!healthData.ok)throw Error('WORKER_HEALTH_INVALID: '+JSON.stringify(healthData));
+  diag('WORKER CONNECTED: '+(healthData.model||'Whisper'));
+  job.stage='splitting MP3 at valid frame boundaries';
+  const parsed=await mp3Chunks(job.file),out=[];
+  diag('MP3 READY: '+job.file.name+' · '+parsed.totalDuration.toFixed(1)+' seconds · '+parsed.chunks.length+' valid audio chunks');
+  for(let i=0;i<parsed.chunks.length;i++){
+    const chunk=parsed.chunks[i],blob=parsed.data.slice(chunk.start,chunk.end);
+    if(blob.byteLength>1024*1024)throw Error('CHUNK_TOO_LARGE: An MP3 segment exceeded 1 MB. Export at a lower bitrate and retry.');
+    job.stage='transcribing audio chunk '+(i+1)+'/'+parsed.chunks.length;
+    say('Transcribing '+job.file.name+' · '+(i+1)+' of '+parsed.chunks.length);
+    diag('UPLOAD: '+job.file.name+' chunk '+(i+1)+'/'+parsed.chunks.length+' · '+Math.round(chunk.startSeconds)+'s');
+    const response=await fetch(base+'/transcribe-chunk',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Chunk-Index':String(i),'X-Chunk-Count':String(parsed.chunks.length),'X-Audio-Name':encodeURIComponent(job.file.name),'X-Task':$('translate').checked?'translate':'transcribe','X-Chunk-Start':String(chunk.startSeconds),'X-Chunk-Duration':String(chunk.duration)},body:blob});
+    let data;try{data=await response.json()}catch{throw Error('WORKER_BAD_RESPONSE: HTTP '+response.status+' returned an invalid response.')}
+    if(!response.ok||!data.ok)throw Error('CLOUDFLARE_AI_ERROR: '+(data.error||response.status)+' · '+(data.message||response.statusText));
+    const cues=cuesFromChunk(data,chunk.startSeconds,chunk.duration);out.push(...cues);
+    diag('CHUNK COMPLETE: '+(i+1)+'/'+parsed.chunks.length+' · '+cues.length+' subtitle cues');
+    $('bar').style.width=Math.round((i+1)/parsed.chunks.length*100)+'%';
+  }
+  if(!out.length)throw Error('NO_TRANSCRIPT: The transcription service returned no speech.');
+  out.sort((a,b)=>a.start-b.start);diag('TRANSCRIPTION COMPLETE: '+out.length+' subtitle cues');return out;
+}
 $('run').onclick=async()=>{const btn=$('run');if(btn.dataset.busy==='1')return;btn.dataset.busy='1';btn.disabled=true;let completed=0;try{for(const job of jobs){if(job.status!=='Queued')continue;job.status='Processing';renderQueue();try{const cues=await transcribe(job);const name=job.file.name.replace(/\.[^.]+$/,'')+'.srt';results.set(name,cues);saveDoc(name,cues);job.status='Done · '+cues.length+' cues';completed++;current=name;renderResults();job.status='Done';say('Completed '+job.file.name+'. Export it now or continue to the next file.');}catch(e){job.status='Failed';job.error=(e&&e.stack)?e.stack:(e?.message||String(e));diag('JOB FAILED: '+job.file.name+' at stage '+(job.stage||'unknown'),job.error);say('Could not process '+job.file.name+': '+(e?.message||String(e))+' · See Diagnostics below.')}renderQueue();$('bar').style.width=Math.round((jobs.filter(j=>j.status!=='Queued'&&j.status!=='Processing').length/jobs.length)*100)+'%'}say('Queue finished. '+completed+' file(s) completed. Export each result using the file selector.')}catch(e){diag('QUEUE FATAL ERROR',e?.stack||e?.message||String(e));say('Queue stopped: '+(e?.message||String(e))+' · See Diagnostics below.')}finally{renderQueue();btn.dataset.busy='0';btn.disabled=!jobs.some(j=>j.status==='Queued')}};
 function makeSrt(name){const cues=results.get(name)||[];return cues.map((c,i)=>(i+1)+'\n'+fmt(c.start)+' --> '+fmt(c.end)+'\n'+c.text.replace(/\r/g,'').trim()).join('\n\n')+'\n'}
 $('download').onclick=()=>{if(!current)return;const blob=new Blob([makeSrt(current)],{type:'application/x-subrip;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=current;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000)};
