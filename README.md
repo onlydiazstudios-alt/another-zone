@@ -1,43 +1,28 @@
 # Another Zone SRT Studio
 
-A static subtitle editor with remote Cloudflare Workers AI transcription.
+A browser-based subtitle editor with remote Whisper transcription through Cloudflare Workers AI.
 
-## Netlify deployment
-- Repository: `onlydiazstudios-alt/another-zone`
-- Publish directory: repository root (`.`)
-- Build command: leave blank
-- When Netlify is linked to this GitHub repository, pushes to the production branch automatically trigger deployment.
+## Website hosting
+The static website is hosted on Render from the repository root. No build command is required; publish directory is `.`.
 
-## Batch audio transcription
-- Select up to five audio files in one batch.
-- Maximum selected file size: 100 MB per file.
-- Files are processed sequentially, one at a time, to avoid running several speech-recognition models concurrently.
-- Each completed audio file gets its own editable subtitle document and its own SRT export.
-- A failed file does not discard successful earlier outputs; the queue continues to the next file.
-- Whisper runs in the browser through Transformers.js; the model downloads on first use and may be cached.
-- The translation option asks Whisper to translate speech into English.
-- No transcription API key or server-side audio upload is configured.
+## AI transcription service
+The AI service is a separate Cloudflare Worker in `cloudflare/worker`. Render static hosting does not run the AI model.
 
-## Important processing limits
-Audio is uploaded to your configured Cloudflare Worker in sequential 1 MB pieces. The Worker calls Cloudflare Workers AI (`@cf/openai/whisper-large-v3-turbo`). Cloudflare account AI allowances and model limits apply; usage is not unlimited. Audio chunk timing is estimated from the file duration and byte position, so review and correct cue timing before delivery. Keep the tab open while the chunks are processed.
+1. Deploy `cloudflare/worker/wrangler.toml` and `cloudflare/worker/src/index.js` as a Cloudflare Worker.
+2. Ensure the Worker has the Workers AI binding named `AI`.
+3. Add the deployed Worker URL to the **Cloudflare AI Worker URL** field in the app.
+4. Confirm the URL opens at `/health` and returns JSON with `ok: true`.
 
-## SRT editing
-- Import and edit SRT files.
-- Edit cue text and millisecond timestamps in horizontal rows.
+The app processes MP3 files sequentially. It parses MP3 frames and sends valid audio-frame chunks of approximately 15 seconds to Whisper, rather than cutting the file at arbitrary byte offsets. Subtitle timestamps are offset using each chunk's actual audio start time. This avoids browser-side full-file audio decoding and reduces memory pressure on iPhones.
+
+For now, remote transcription accepts MP3 audio. Convert other formats to MP3 before uploading.
+
+## Free usage
+Cloudflare Workers AI currently includes a daily free allowance, not unlimited transcription. The allowance resets daily; transcription can stop when it is exhausted. Check current Cloudflare pricing and usage before relying on it for large batches.
+
+## Editing and export
+- Import existing SRT files.
+- Edit subtitle text and timecodes.
 - Export normalized SRT files.
-- Review timing and overlaps before delivery.
-
-## Editor integrations
-- **Adobe Premiere Pro:** native UXP panel in `integrations/premiere/`. Current release supports SRT import/edit/export; AI transcription is not yet wired into the panel.
-- **DaVinci Resolve:** planned.
-- **CapCut Desktop and other editors:** SRT interchange is the compatibility route.
-- **Photoshop:** future companion for subtitle graphics and title cards.
-
-The Premiere panel has not yet been verified inside the user's local Premiere installation.
-## Cloudflare AI setup\n- Worker source: `cloudflare/worker/src/index.js`.\n- Wrangler config: `cloudflare/worker/wrangler.toml` (includes the `AI` binding).\n- In Cloudflare, create a Worker from this repository with root directory `cloudflare/worker` and deploy command `npx wrangler deploy`.\n- If the dashboard does not pick up the binding from Wrangler config, add a Workers AI binding named `AI` in the Worker settings.\n- Set the deployed `workers.dev` URL in the app's Cloudflare AI Worker URL field.\n- Health check: `GET /health`; transcription endpoint: `POST /transcribe-chunk`.\n\n## Reliability fixes
-- Fixed Whisper input to pass raw audio together with its actual sample rate, as required by the Transformers.js audio pipeline.
-- Changed Whisper segment timestamp mode to the documented boolean timestamp option.
-- Audio is decoded at 16 kHz to reduce memory use before inference.
-- Added direct SRT/TXT import into the editable subtitle table.
-- Completed subtitle documents are autosaved in browser IndexedDB and restored when the same browser opens the app again.
-- This does not guarantee recovery of an audio transcription interrupted by a browser or operating-system crash; large files can still exceed device memory, particularly on phones.
+- Completed subtitle documents are saved in browser IndexedDB on the same device.
+- Review subtitle wording, timing, and overlaps before delivery.
