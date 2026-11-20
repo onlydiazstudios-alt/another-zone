@@ -35,7 +35,6 @@ $('files').onchange=()=>{const chosen=[...$('files').files];if(chosen.length>5){
 async function getAudioDuration(file){return new Promise((resolve,reject)=>{const audio=document.createElement('audio'),url=URL.createObjectURL(file),timer=setTimeout(()=>{URL.revokeObjectURL(url);reject(Error('AUDIO_METADATA_TIMEOUT: Could not read audio duration.'))},15000);audio.preload='metadata';audio.onloadedmetadata=()=>{clearTimeout(timer);const d=audio.duration;URL.revokeObjectURL(url);if(!Number.isFinite(d)||d<=0)reject(Error('AUDIO_DURATION_UNKNOWN: Could not determine recording length.'));else resolve(d)};audio.onerror=()=>{clearTimeout(timer);URL.revokeObjectURL(url);reject(Error('AUDIO_METADATA_FAILED: Safari could not read this audio format.'))};audio.src=url})}
 function parseWorkerTime(v){if(typeof v==='number')return v;const n=Number(v);return Number.isFinite(n)?n:0}
 function mp3Chunks(file){
-  const bytes=new Uint8Array(file.size);
   return file.arrayBuffer().then(buffer=>{
     const data=new Uint8Array(buffer);let pos=0;
     if(data.length>=10&&String.fromCharCode(...data.slice(0,3))==='ID3'){
