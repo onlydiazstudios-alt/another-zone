@@ -19,11 +19,12 @@ function json(data, status = 200, origin = ALLOWED_ORIGIN) {
 
 export default {
   async fetch(request, env) {
-    const origin = request.headers.get("Origin") || "";\n    if (origin && origin !== ALLOWED_ORIGIN) return new Response("Origin not allowed", { status: 403 });
+    const origin = request.headers.get("Origin") || "";
+    if (origin && origin !== ALLOWED_ORIGIN) return new Response("Origin not allowed", { status: 403 });
     if (request.method === "OPTIONS") return new Response(null, {
       status: 204,
       headers: {
-        "access-control-allow-origin": origin,
+        "access-control-allow-origin": ALLOWED_ORIGIN,
         "access-control-allow-methods": "GET, POST, OPTIONS",
         "access-control-allow-headers": "Content-Type, X-Chunk-Index, X-Chunk-Count, X-Audio-Name, X-Task, X-Duration",
         "access-control-max-age": "86400"
