@@ -34,3 +34,10 @@ The 100 MB limit is an import ceiling, not a promise that every device can decod
 - **Photoshop:** future companion for subtitle graphics and title cards.
 
 The Premiere panel has not yet been verified inside the user's local Premiere installation.
+## Reliability fixes
+- Fixed Whisper input to pass raw audio together with its actual sample rate, as required by the Transformers.js audio pipeline.
+- Changed Whisper segment timestamp mode to the documented boolean timestamp option.
+- Audio is decoded at 16 kHz to reduce memory use before inference.
+- Added direct SRT/TXT import into the editable subtitle table.
+- Completed subtitle documents are autosaved in browser IndexedDB and restored when the same browser opens the app again.
+- This does not guarantee recovery of an audio transcription interrupted by a browser or operating-system crash; large files can still exceed device memory, particularly on phones.
