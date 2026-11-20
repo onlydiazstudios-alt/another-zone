@@ -14,7 +14,7 @@ First-release Adobe Premiere Pro UXP panel. This is a native dockable panel, not
 The panel exports SRT. In Premiere, use File → Import, select the exported SRT, then place the imported subtitle item/track in the sequence. Direct creation and styling of caption clips through Premiere's UXP DOM is not claimed in this release; that requires validation against the current caption and sequence APIs.
 
 ## Install for development
-Requirements: Premiere Pro 25.6 or later, UXP Developer Tool 2.2 or later.
+Requirements: Premiere Pro 25.6 or later, UXP Developer Tool 2.2 or later. The optional panel-to-timeline media drag-and-drop feature requires Premiere Pro 27.0 or later; SRT editing and export are designed for the 25.6+ baseline.
 
 1. Enable Developer Mode in Premiere: Settings → Plugins → Enable developer mode, then restart Premiere.
 2. In UXP Developer Tool, choose Add Plugin and select integrations/premiere/manifest.json.
