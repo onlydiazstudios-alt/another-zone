@@ -1,6 +1,6 @@
 # Another Zone SRT Studio
 
-A static, browser-based subtitle editor and local Whisper transcription tool.
+A static subtitle editor with remote Cloudflare Workers AI transcription.
 
 ## Netlify deployment
 - Repository: `onlydiazstudios-alt/another-zone`
@@ -19,7 +19,7 @@ A static, browser-based subtitle editor and local Whisper transcription tool.
 - No transcription API key or server-side audio upload is configured.
 
 ## Important processing limits
-The 100 MB limit is an import ceiling, not a promise that every device can decode or transcribe every file of that size. Browser audio decoding may expand compressed audio into uncompressed PCM and consume several times the original file size in memory. Use a laptop/desktop for large recordings; mobile devices may run out of memory. Keep the browser tab open during processing. Generated text and timestamps require human review; no automatic speech-recognition system guarantees perfect accuracy.
+Audio is uploaded to your configured Cloudflare Worker in sequential 1 MB pieces. The Worker calls Cloudflare Workers AI (`@cf/openai/whisper-large-v3-turbo`). Cloudflare account AI allowances and model limits apply; usage is not unlimited. Audio chunk timing is estimated from the file duration and byte position, so review and correct cue timing before delivery. Keep the tab open while the chunks are processed.
 
 ## SRT editing
 - Import and edit SRT files.
@@ -34,7 +34,7 @@ The 100 MB limit is an import ceiling, not a promise that every device can decod
 - **Photoshop:** future companion for subtitle graphics and title cards.
 
 The Premiere panel has not yet been verified inside the user's local Premiere installation.
-## Reliability fixes
+## Cloudflare AI setup\n- Worker source: `cloudflare/worker/src/index.js`.\n- Wrangler config: `cloudflare/worker/wrangler.toml` (includes the `AI` binding).\n- In Cloudflare, create a Worker from this repository with root directory `cloudflare/worker` and deploy command `npx wrangler deploy`.\n- If the dashboard does not pick up the binding from Wrangler config, add a Workers AI binding named `AI` in the Worker settings.\n- Set the deployed `workers.dev` URL in the app's Cloudflare AI Worker URL field.\n- Health check: `GET /health`; transcription endpoint: `POST /transcribe-chunk`.\n\n## Reliability fixes
 - Fixed Whisper input to pass raw audio together with its actual sample rate, as required by the Transformers.js audio pipeline.
 - Changed Whisper segment timestamp mode to the documented boolean timestamp option.
 - Audio is decoded at 16 kHz to reduce memory use before inference.
