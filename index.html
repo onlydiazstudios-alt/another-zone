@@ -86,9 +86,9 @@ function cuesFromChunk(data,offset,duration){
   return cues;
 }
 async function transcribe(job){
-  const base=$('workerurl').value.trim().replace(/\\/+$/,'');
-  if(!/^https:\\/\\//i.test(base))throw Error('WORKER_URL_MISSING: The transcription service is not connected yet. A Cloudflare Worker URL is required.');
-  if(!/\\.mp3(?:$|\\?)/i.test(job.file.name))throw Error('FORMAT_NOT_SUPPORTED: Reliable remote chunking currently supports MP3 files. Please use an MP3 export.');
+  const base=$('workerurl').value.trim().replace(/\/+$/,'');
+  if(!/^https:\/\//i.test(base))throw Error('WORKER_URL_MISSING: The transcription service is not connected yet. A Cloudflare Worker URL is required.');
+  if(!/\.mp3(?:$|\?)/i.test(job.file.name))throw Error('FORMAT_NOT_SUPPORTED: Reliable remote chunking currently supports MP3 files. Please use an MP3 export.');
   job.stage='checking transcription service';diag('WORKER: checking '+base+'/health');
   let health;try{health=await fetch(base+'/health',{method:'GET'});}catch(e){throw Error('WORKER_CONNECTION_FAILED: Could not reach the transcription service. Check its URL and deployment. '+e.message)}
   if(!health.ok)throw Error('WORKER_HEALTH_FAILED: Service returned HTTP '+health.status+'.');
