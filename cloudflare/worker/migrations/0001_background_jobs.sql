@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS job_chunks (
   file_index INTEGER NOT NULL,
   chunk_index INTEGER NOT NULL,
   r2_key TEXT NOT NULL,
+  duration REAL NOT NULL DEFAULT 30,
   status TEXT NOT NULL,
   result_json TEXT,
   error TEXT,
