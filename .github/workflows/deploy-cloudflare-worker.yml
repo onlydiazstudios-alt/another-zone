@@ -16,6 +16,11 @@ on:
 permissions:
   contents: read
 
+# Prevent overlapping deployments from racing while updating the same Worker.
+concurrency:
+  group: another-zone-srt-worker-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   validate:
     if: github.event_name == 'pull_request'
