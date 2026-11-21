@@ -1,6 +1,8 @@
 import { Buffer } from "node:buffer";
 
 const WHISPER_MODEL = "@cf/openai/whisper-large-v3-turbo";
+const GEMINI_TRANSCRIBE_MODEL = "gemini-3.5-transcribe";
+const GEMINI_TEXT_MODEL = "gemini-3.5-flash-lite";
 const TRANSLATION_MODEL = "@cf/meta/m2m100-1.2b";
 const MAX_CHUNK_BYTES = 1024 * 1024;
 const ALLOWED_ORIGINS = new Set([
@@ -39,7 +41,7 @@ async function transcribeGemini(bytes, env, task) {
   const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-transcribe:generateContent?key=" + encodeURIComponent(key), {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ contents: [{ parts: [{ text: instruction }, { inline_data: { mime_type: "audio/mpeg", data: audio } }] }] })
+    body: JSON.stringify({ contents: [{ parts: [{ text: instruction }, { inline_data: { mime_type: "audio/wav", data: audio } }] }] })
   });
   const data = await response.json();
   if (!response.ok) throw new Error("GEMINI_API_ERROR: " + (data.error?.message || response.status));
@@ -47,7 +49,7 @@ async function transcribeGemini(bytes, env, task) {
 }
 async function transcribeDeepgram(bytes, env) {
   const key = requireKey(env.DEEPGRAM_API_KEY, "DEEPGRAM");
-  const response = await fetch("https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&punctuate=true", {
+  const response = await fetch("https://api.deepgram.com/v1/listen?model=nova-3&language=multi&smart_format=true&punctuate=true", {
     method: "POST",
     headers: { authorization: "Token " + key, "content-type": "audio/wav" },
     body: bytes
@@ -72,7 +74,7 @@ async function translateText(text, provider, env, targetLanguage, sourceLanguage
   }
   if (provider === "gemini") {
     const key = requireKey(env.GEMINI_API_KEY, "GEMINI");
-    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-transcribe:generateContent?key=" + encodeURIComponent(key), {
+    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=" + encodeURIComponent(key), {
       method:"POST", headers:{"content-type":"application/json"},
       body:JSON.stringify({contents:[{parts:[{text:"Translate the following text into " + targetLanguage + ". Preserve meaning, tone, names, and line breaks. Return only the translation.\n\n" + text}]}]})
     });
