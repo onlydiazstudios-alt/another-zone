@@ -5,3 +5,23 @@ compatibility_flags = ["nodejs_compat"]
 
 [ai]
 binding = "AI"
+
+# The deployment script replaces this token with the existing D1 database ID.
+[[d1_databases]]
+binding = "DB"
+database_name = "another-zone-srt-jobs"
+database_id = "__D1_DATABASE_ID__"
+
+[[queues.producers]]
+binding = "JOBS_QUEUE"
+queue = "another-zone-srt-jobs"
+
+[[queues.consumers]]
+queue = "another-zone-srt-jobs"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 5
+max_concurrency = 2
+
+[triggers]
+crons = ["0 3 * * *"]
