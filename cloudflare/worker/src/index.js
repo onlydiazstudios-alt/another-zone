@@ -111,9 +111,48 @@ export default {
         const provider = ["cloudflare","gemini"].includes(body.provider) ? body.provider : "cloudflare";
         const target = String(body.targetLanguage || "English").slice(0,50);
         const source = String(body.sourceLanguage || "English").slice(0,50);
-        const translated = [];
-        for (const item of items) translated.push(await translateText(String(item || "").slice(0,4000),provider,env,target,source));
-        return json({ok:true,translated,provider},200,origin);
+        if (provider === "cloudflare" && ["auto-detect","other / multilingual",""].includes(source.toLowerCase())) {
+          return json({ok:false,error:"SOURCE_LANGUAGE_REQUIRED",message:"Cloudflare M2M100 requires the actual source language. Select it or use Gemini for automatic language detection."},400,origin);
+        }
+        let translated;
+        let detectedSourceLanguage = source;
+        if (provider === "gemini") {
+          const key = requireKey(env.GEMINI_API_KEY, "GEMINI");
+          const numbered = items.map((item, index) => ({ index, text: String(item || "").slice(0, 4000) }));
+          const sourceInstruction = ["auto-detect","other / multilingual",""].includes(source.toLowerCase())
+            ? "Identify the source language from the text. The lines may contain multilingual speech."
+            : "The source language is " + source + ".";
+          const prompt = "You are a professional subtitle translator. " + sourceInstruction +
+            " Translate every subtitle line into " + target + ". Preserve meaning, intent, tone, names, slang and cultural context. Do not summarize, censor, embellish, or add explanations. Keep each line separate and in exactly the same order. Return a JSON object with detectedSourceLanguage (language name) and translations (an array of strings with exactly " + numbered.length + " entries). Input lines: " + JSON.stringify(numbered);
+          const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + GEMINI_TEXT_MODEL + ":generateContent?key=" + encodeURIComponent(key), {
+            method:"POST",
+            headers:{"content-type":"application/json"},
+            body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{responseMimeType:"application/json",temperature:0.1}})
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error("GEMINI_API_ERROR: " + (data.error?.message || response.status));
+          const raw = (data.candidates?.[0]?.content?.parts || []).map(p=>p.text||"").join("").trim();
+          let parsed;
+          try { parsed = JSON.parse(raw); } catch { throw new Error("GEMINI_TRANSLATION_FORMAT_ERROR: The translation model did not return valid structured subtitle lines."); }
+          if (!Array.isArray(parsed.translations) || parsed.translations.length !== items.length || parsed.translations.some(x => typeof x !== "string" || !x.trim())) {
+            throw new Error("GEMINI_TRANSLATION_COUNT_ERROR: The model did not return one translation for every subtitle line.");
+          }
+          translated = parsed.translations;
+          detectedSourceLanguage = String(parsed.detectedSourceLanguage || source);
+        } else {
+          const pool = 4;
+          translated = new Array(items.length);
+          let cursor = 0;
+          const run = async () => {
+            while (true) {
+              const index = cursor++;
+              if (index >= items.length) return;
+              translated[index] = await translateText(String(items[index] || "").slice(0,4000),provider,env,target,source);
+            }
+          };
+          await Promise.all(Array.from({length:Math.min(pool,items.length)},run));
+        }
+        return json({ok:true,translated,provider,detectedSourceLanguage},200,origin);
       } catch(error) { return json({ok:false,error:"TRANSLATION_FAILED",message:errorMessage(error)},502,origin); }
     }
     if (request.method !== "POST" || url.pathname !== "/transcribe-chunk") {
