@@ -47,9 +47,11 @@ async function transcribeGemini(bytes, env, task) {
   if (!response.ok) throw new Error("GEMINI_API_ERROR: " + (data.error?.message || response.status));
   return { text: (data.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("\n").trim(), segments: [], provider: "gemini" };
 }
-async function transcribeDeepgram(bytes, env) {
+async function transcribeDeepgram(bytes, env, sourceLanguage) {
   const key = requireKey(env.DEEPGRAM_API_KEY, "DEEPGRAM");
-  const response = await fetch("https://api.deepgram.com/v1/listen?model=nova-3&language=multi&smart_format=true&punctuate=true", {
+  const deepgramLanguages = { "English":"en", "French":"fr", "Spanish":"es", "Portuguese":"pt", "Arabic":"ar", "Hausa":"ha", "Yoruba":"yo", "Igbo":"ig", "Swahili":"sw", "German":"de", "Japanese":"ja", "Chinese":"zh" };
+  const language = deepgramLanguages[sourceLanguage] || "multi";
+  const response = await fetch("https://api.deepgram.com/v1/listen?model=nova-3&language=" + encodeURIComponent(language) + "&smart_format=true&punctuate=true", {
     method: "POST",
     headers: { authorization: "Token " + key, "content-type": "audio/wav" },
     body: bytes
@@ -131,7 +133,7 @@ export default {
         const audio = Buffer.from(bytes).toString("base64");
         result = await env.AI.run(WHISPER_MODEL,{audio,task});
       } else if (provider === "gemini") result = await transcribeGemini(bytes,env,task);
-      else if (provider === "deepgram") result = await transcribeDeepgram(bytes,env);
+      else if (provider === "deepgram") result = await transcribeDeepgram(bytes,env,request.headers.get("X-Source-Language") || "Auto-detect");
       else return json({ok:false,error:"PROVIDER_NOT_SUPPORTED",message:"Choose Cloudflare Whisper, Gemini, or Deepgram."},400,origin);
       return json({ok:true,text:result?.text||"",segments:Array.isArray(result?.segments)?result.segments:[],vtt:result?.vtt||"",wordCount:result?.word_count||0,provider},200,origin);
     } catch(error) { return json({ok:false,error:"TRANSCRIPTION_FAILED",message:errorMessage(error)},502,origin); }
