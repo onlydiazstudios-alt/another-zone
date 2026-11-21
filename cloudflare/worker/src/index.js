@@ -67,8 +67,8 @@ async function translateText(text, provider, env, targetLanguage, sourceLanguage
   if (!text) return "";
   if (provider === "cloudflare") {
     if (!env.AI) throw new Error("AI_BINDING_MISSING: Workers AI binding named AI is not configured.");
-    const target = LANGUAGE_NAMES[targetLanguage] || targetLanguage;
-    const source = LANGUAGE_NAMES[sourceLanguage] || sourceLanguage || "english";
+    const target = LANGUAGE_NAMES[String(targetLanguage).toLowerCase()] || String(targetLanguage).toLowerCase();
+    const source = LANGUAGE_NAMES[String(sourceLanguage || "english").toLowerCase()] || String(sourceLanguage || "english").toLowerCase();
     const result = await env.AI.run(TRANSLATION_MODEL, { text, source_lang: source, target_lang: target });
     return result?.translated_text || result?.text || "";
   }
