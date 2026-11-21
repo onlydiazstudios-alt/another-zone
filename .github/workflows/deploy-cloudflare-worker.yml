@@ -8,13 +8,39 @@ on:
       - "cloudflare/worker/**"
       - ".github/workflows/deploy-cloudflare-worker.yml"
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "cloudflare/worker/**"
+      - ".github/workflows/deploy-cloudflare-worker.yml"
 
 permissions:
   contents: read
 
 jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    name: Validate background Worker and D1 schema
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check Worker and provisioning script syntax
+        working-directory: cloudflare/worker
+        run: |
+          node --check src/index.js
+          node --check provision-resources.mjs
+      - name: Validate D1 schema with SQLite
+        working-directory: cloudflare/worker
+        run: |
+          python -c "import sqlite3, pathlib; db=sqlite3.connect(':memory:'); db.executescript(pathlib.Path('migrations/0001_background_jobs.sql').read_text()); print('D1 schema is valid')"
+
   deploy:
-    name: Deploy Cloudflare Worker
+    if: github.event_name != 'pull_request'
+    name: Provision and deploy Cloudflare Worker
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -25,7 +51,19 @@ jobs:
           node-version: 22
       - name: Install Wrangler
         run: npm install --global wrangler@4
-      - name: Deploy Worker
+      - name: Provision durable job storage and queue
+        working-directory: cloudflare/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node provision-resources.mjs
+      - name: Apply database schema
+        working-directory: cloudflare/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: wrangler d1 execute another-zone-srt-jobs --remote --file=./migrations/0001_background_jobs.sql
+      - name: Deploy Worker and Queue consumer
         working-directory: cloudflare/worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
