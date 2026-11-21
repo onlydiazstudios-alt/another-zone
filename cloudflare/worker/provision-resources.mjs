@@ -50,6 +50,10 @@ queue = "another-zone-srt-jobs"
 max_batch_size = 1
 max_batch_timeout = 1
 max_retries = 5
+max_concurrency = 2
+
+[triggers]
+crons = ["0 3 * * *"]
 `;
 await writeFile(new URL('./wrangler.toml', import.meta.url), config);
 console.log('Cloudflare D1, R2 and Queue resources are ready; wrangler.toml generated.');
