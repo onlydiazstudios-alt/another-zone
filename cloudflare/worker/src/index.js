@@ -334,7 +334,7 @@ async function handleJobs(request, env, url, origin) {
       return json({ ok: true, jobs: Array.from(byJob.values()).slice(0, 50) }, 200, origin);
     } catch (error) {
       console.error('Background job read failed', { readStage, hasDbBinding: !!env.DB }, error);
-      return json({ ok: false, error: 'JOB_READ_FAILED', message: errorMessage(error), debug: { stage: readStage, hasDbBinding: !!env.DB } }, 500, origin);
+      return json({ ok: false, error: 'JOB_READ_FAILED', message: errorMessage(error) }, 500, origin);
     }
   }
   return json({ ok: false, error: 'NOT_FOUND' }, 404, origin);
