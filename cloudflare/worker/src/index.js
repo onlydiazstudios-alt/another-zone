@@ -236,6 +236,17 @@ async function handleJobs(request, env, url, origin) {
       .bind('upload_failed', now(), jobId).run();
     return json({ ok: true, status: 'upload_failed' }, 200, origin);
   }
+  const deleteMatch = path.match(/^\/jobs\/([0-9a-f-]+)$/i);
+  if (request.method === 'DELETE' && deleteMatch) {
+    const jobId = deleteMatch[1];
+    if (!(await authorizedJob(request, env, jobId))) return json({ ok: false, error: 'JOB_NOT_FOUND' }, 404, origin);
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM job_chunks WHERE job_id = ?').bind(jobId),
+      env.DB.prepare('DELETE FROM job_files WHERE job_id = ?').bind(jobId),
+      env.DB.prepare('DELETE FROM jobs WHERE id = ?').bind(jobId)
+    ]);
+    return json({ ok: true, deleted: true }, 200, origin);
+  }
   const downloadMatch = path.match(/^\/jobs\/([0-9a-f-]+)\/download\/(\d+)$/i);
   if (request.method === 'GET' && downloadMatch) {
     const [, jobId, fileIndexText] = downloadMatch;
@@ -352,7 +363,7 @@ async function processJobQueueMessage(message, env) {
     if ((rows.results || []).length !== file.chunk_count || rows.results.some(row => !row.result_json)) throw new Error('Not all audio chunks are ready for finalization.');
     const cues = makeJobCues(rows.results);
     if (!cues.length) throw new Error('No clear speech was detected in this audio file.');
-    if (job.translation_provider === 'gemini') {
+    if (job.target_language.toLowerCase() !== job.source_language.toLowerCase() && job.translation_provider === 'gemini') {
       for (let offset = 0; offset < cues.length; offset += 40) {
         const batch = cues.slice(offset, offset + 40);
         const numbered = batch.map((cue, i) => ({ index: i, text: cue.text }));
@@ -369,7 +380,7 @@ async function processJobQueueMessage(message, env) {
         if (!Array.isArray(parsed.translations) || parsed.translations.length !== batch.length || parsed.translations.some(x => typeof x !== 'string' || !x.trim())) throw new Error('Translation returned an incomplete subtitle batch.');
         batch.forEach((cue, i) => { cue.text = parsed.translations[i].trim(); });
       }
-    } else {
+    } else if (job.target_language.toLowerCase() !== job.source_language.toLowerCase()) {
       const language = job.source_language;
       if (['auto-detect', 'other / multilingual'].includes(language.toLowerCase())) throw new Error('Cloudflare translation requires a selected spoken language.');
       for (let offset = 0; offset < cues.length; offset += 40) {
