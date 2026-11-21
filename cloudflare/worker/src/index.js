@@ -158,6 +158,12 @@ function makeJobCues(chunks) {
   });
 }
 async function handleJobs(request, env, url, origin) {
+  if (!env?.DB || typeof env.DB.prepare !== 'function' || typeof env.DB.batch !== 'function') {
+    return json({ ok: false, error: 'D1_BINDING_MISSING', message: 'The background-job database is not connected to this Worker. The deployment configuration must include the D1 binding named DB.' }, 503, origin);
+  }
+  if (!env?.JOBS_QUEUE || typeof env.JOBS_QUEUE.send !== 'function') {
+    return json({ ok: false, error: 'QUEUE_BINDING_MISSING', message: 'The background-job queue is not connected to this Worker. The deployment configuration must include the queue producer named JOBS_QUEUE.' }, 503, origin);
+  }
   const path = url.pathname;
   if (request.method === 'POST' && path === '/jobs') {
     try {
@@ -426,7 +432,7 @@ export default {
           deepgram:{available:!!env.DEEPGRAM_API_KEY, tasks:["transcribe"]},
           cloudflareTranslation:{available:!!env.AI, model:TRANSLATION_MODEL}
         },
-        backgroundJobs:{available:!!env.DB && !!env.JOBS_QUEUE, storage:'D1', queue:!!env.JOBS_QUEUE}
+        backgroundJobs:{available:!!env.DB && typeof env.DB.prepare === 'function' && typeof env.DB.batch === 'function' && !!env.JOBS_QUEUE && typeof env.JOBS_QUEUE.send === 'function', database:!!env.DB && typeof env.DB.prepare === 'function' ? 'connected' : 'missing', storage:'D1', queue:!!env.JOBS_QUEUE && typeof env.JOBS_QUEUE.send === 'function'}
       },200,origin);
     }
     if (request.method === "POST" && url.pathname === "/translate") {
