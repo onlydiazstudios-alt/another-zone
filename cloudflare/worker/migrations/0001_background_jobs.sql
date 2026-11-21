@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS job_files (
   duration REAL NOT NULL,
   chunk_count INTEGER NOT NULL,
   status TEXT NOT NULL,
-  output_key TEXT,
+  output_srt TEXT,
   error TEXT,
   PRIMARY KEY(job_id, file_index),
   FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS job_chunks (
   job_id TEXT NOT NULL,
   file_index INTEGER NOT NULL,
   chunk_index INTEGER NOT NULL,
-  r2_key TEXT NOT NULL,
+  audio_blob BLOB,
   duration REAL NOT NULL DEFAULT 30,
   status TEXT NOT NULL,
   result_json TEXT,
