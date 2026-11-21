@@ -216,6 +216,26 @@ async function handleJobs(request, env, url, origin) {
       return json({ ok: false, error: 'CHUNK_QUEUE_FAILED', message: errorMessage(error) }, 502, origin);
     }
   }
+  const completeMatch = path.match(/^\/jobs\/([0-9a-f-]+)\/complete-upload$/i);
+  if (request.method === 'POST' && completeMatch) {
+    const jobId = completeMatch[1];
+    if (!(await authorizedJob(request, env, jobId))) return json({ ok: false, error: 'JOB_NOT_FOUND' }, 404, origin);
+    await env.DB.prepare('UPDATE job_files SET status = CASE WHEN status = ? THEN ? ELSE ? END WHERE job_id = ?')
+      .bind('completed', 'completed', 'processing', jobId).run();
+    await env.DB.prepare('UPDATE jobs SET status = CASE WHEN status = ? THEN ? ELSE ? END, updated_at = ? WHERE id = ?')
+      .bind('completed', 'completed', 'processing', now(), jobId).run();
+    return json({ ok: true, status: 'processing' }, 200, origin);
+  }
+  const abortMatch = path.match(/^\/jobs\/([0-9a-f-]+)\/abort$/i);
+  if (request.method === 'POST' && abortMatch) {
+    const jobId = abortMatch[1];
+    if (!(await authorizedJob(request, env, jobId))) return json({ ok: false, error: 'JOB_NOT_FOUND' }, 404, origin);
+    await env.DB.prepare('UPDATE job_files SET status = ?, error = ? WHERE job_id = ? AND status != ?')
+      .bind('failed', 'Audio upload did not finish. Start a new upload to retry.', jobId, 'completed').run();
+    await env.DB.prepare('UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?')
+      .bind('upload_failed', now(), jobId).run();
+    return json({ ok: true, status: 'upload_failed' }, 200, origin);
+  }
   const downloadMatch = path.match(/^\/jobs\/([0-9a-f-]+)\/download\/(\d+)$/i);
   if (request.method === 'GET' && downloadMatch) {
     const [, jobId, fileIndexText] = downloadMatch;
