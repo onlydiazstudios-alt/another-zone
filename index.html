@@ -81,7 +81,21 @@ function cuesFromChunk(data,offset,duration){
     const a=parseWorkerTime(seg.start??seg.timestamp?.[0]),b=parseWorkerTime(seg.end??seg.timestamp?.[1]);
     cues.push({start:Math.round((offset+Math.max(0,a))*1000),end:Math.round(Math.min(offset+duration,offset+Math.max(a+0.25,b))*1000),text});
   }
-  if(!cues.length){const text=String(data.text||'').trim();if(text)cues.push({start:Math.round(offset*1000),end:Math.round((offset+duration)*1000),text});}
+  if(!cues.length){
+    const text=String(data.text||'').trim();
+    if(text){
+      const sentences=(text.match(/[^.!?。！？]+[.!?。！？]?/g)||[text]).map(s=>s.trim()).filter(Boolean);
+      const weights=sentences.map(s=>Math.max(1,s.split(/\s+/).length));
+      const total=weights.reduce((a,b)=>a+b,0);
+      let cursor=offset;
+      sentences.forEach((sentence,i)=>{
+        const share=duration*(weights[i]/total);
+        const start=Math.round(cursor*1000),end=Math.round((cursor+share)*1000);
+        cues.push({start,end:Math.max(start+250,end),text:sentence});
+        cursor+=share;
+      });
+    }
+  }
   return cues;
 }
 async function transcribe(job){
