@@ -118,7 +118,7 @@ function makeJobCues(chunks) {
   for (let i = 0; i < chunks.length; i++) {
     const item = chunks[i];
     const parsed = JSON.parse(item.result_json || '{}');
-    const offset = i * 30;
+    const offset = Number(item.chunk_index) * 30;
     const words = Array.isArray(parsed.segments) ? parsed.segments : [];
     if (words.length) {
       let group = [];
@@ -205,8 +205,8 @@ async function handleJobs(request, env, url, origin) {
     if (existing?.status === 'done') return json({ ok: true, duplicate: true, status: 'done' }, 200, origin);
     try {
       await env.MEDIA.put(key, bytes, { httpMetadata: { contentType: 'audio/wav' } });
-      await env.DB.prepare('INSERT INTO job_chunks (job_id, file_index, chunk_index, r2_key, status) VALUES (?, ?, ?, ?, ?) ON CONFLICT(job_id, file_index, chunk_index) DO UPDATE SET r2_key = excluded.r2_key, status = CASE WHEN job_chunks.status = "done" THEN "done" ELSE "queued" END')
-        .bind(jobId, fileIndex, chunkIndex, key, 'queued').run();
+      await env.DB.prepare('INSERT INTO job_chunks (job_id, file_index, chunk_index, r2_key, duration, status) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(job_id, file_index, chunk_index) DO UPDATE SET r2_key = excluded.r2_key, duration = excluded.duration, status = CASE WHEN job_chunks.status = "done" THEN "done" ELSE "queued" END')
+        .bind(jobId, fileIndex, chunkIndex, key, Math.max(0.1, Math.min(30, Number(request.headers.get('X-Chunk-Duration') || 30))), 'queued').run();
       const current = await env.DB.prepare('SELECT status FROM job_chunks WHERE job_id = ? AND file_index = ? AND chunk_index = ?').bind(jobId, fileIndex, chunkIndex).first();
       if (current.status !== 'done') await env.JOBS_QUEUE.send({ type: 'transcribe', jobId, fileIndex, chunkIndex });
       await env.DB.prepare('UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?').bind('processing', now(), jobId).run();
@@ -298,7 +298,7 @@ async function processJobQueueMessage(message, env) {
   }
   if (body.type === 'finalize') {
     if (file.status === 'completed') return;
-    const rows = await env.DB.prepare('SELECT chunk_index, result_json FROM job_chunks WHERE job_id = ? AND file_index = ? ORDER BY chunk_index').bind(jobId, fileIndex).all();
+    const rows = await env.DB.prepare('SELECT chunk_index, result_json, duration FROM job_chunks WHERE job_id = ? AND file_index = ? ORDER BY chunk_index').bind(jobId, fileIndex).all();
     if ((rows.results || []).length !== file.chunk_count || rows.results.some(row => !row.result_json)) throw new Error('Not all audio chunks are ready for finalization.');
     const cues = makeJobCues(rows.results);
     if (!cues.length) throw new Error('No clear speech was detected in this audio file.');
