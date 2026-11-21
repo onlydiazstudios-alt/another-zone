@@ -90,7 +90,7 @@ async function translateText(text, provider, env, targetLanguage, sourceLanguage
 
 
 const MAX_JOB_CHUNKS = 300;
-const JOB_PREFIX = 'jobs/';
+const MAX_PENDING_AUDIO_BYTES = 400 * 1024 * 1024;
 const now = () => Math.floor(Date.now() / 1000);
 async function tokenHash(token) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
@@ -200,13 +200,14 @@ async function handleJobs(request, env, url, origin) {
     if (!file || chunkIndex < 0 || chunkIndex >= file.chunk_count) return json({ ok: false, error: 'CHUNK_NOT_FOUND' }, 404, origin);
     const bytes = await request.arrayBuffer();
     if (!bytes.byteLength || bytes.byteLength > MAX_CHUNK_BYTES) return json({ ok: false, error: 'INVALID_CHUNK_SIZE' }, 413, origin);
-    const key = JOB_PREFIX + jobId + '/' + fileIndex + '/' + chunkIndex + '.wav';
     const existing = await env.DB.prepare('SELECT status FROM job_chunks WHERE job_id = ? AND file_index = ? AND chunk_index = ?').bind(jobId, fileIndex, chunkIndex).first();
     if (existing?.status === 'done') return json({ ok: true, duplicate: true, status: 'done' }, 200, origin);
     try {
-      await env.MEDIA.put(key, bytes, { httpMetadata: { contentType: 'audio/wav' } });
-      await env.DB.prepare('INSERT INTO job_chunks (job_id, file_index, chunk_index, r2_key, duration, status) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(job_id, file_index, chunk_index) DO UPDATE SET r2_key = excluded.r2_key, duration = excluded.duration, status = CASE WHEN job_chunks.status = "done" THEN "done" ELSE "queued" END')
-        .bind(jobId, fileIndex, chunkIndex, key, Math.max(0.1, Math.min(30, Number(request.headers.get('X-Chunk-Duration') || 30))), 'queued').run();
+      const pending = await env.DB.prepare('SELECT COALESCE(SUM(length(audio_blob)), 0) AS bytes FROM job_chunks').first();
+      if ((pending?.bytes || 0) + bytes.byteLength > MAX_PENDING_AUDIO_BYTES)
+        return json({ ok: false, error: 'BACKGROUND_STORAGE_BUSY', message: 'The background queue is temporarily full. Your audio is safe on this device; retry the upload shortly.' }, 429, origin);
+      await env.DB.prepare('INSERT INTO job_chunks (job_id, file_index, chunk_index, audio_blob, duration, status) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(job_id, file_index, chunk_index) DO UPDATE SET audio_blob = excluded.audio_blob, duration = excluded.duration, status = CASE WHEN job_chunks.status = "done" THEN "done" ELSE "queued" END')
+        .bind(jobId, fileIndex, chunkIndex, bytes, Math.max(0.1, Math.min(30, Number(request.headers.get('X-Chunk-Duration') || 30))), 'queued').run();
       const current = await env.DB.prepare('SELECT status FROM job_chunks WHERE job_id = ? AND file_index = ? AND chunk_index = ?').bind(jobId, fileIndex, chunkIndex).first();
       if (current.status !== 'done') await env.JOBS_QUEUE.send({ type: 'transcribe', jobId, fileIndex, chunkIndex });
       await env.DB.prepare('UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?').bind('processing', now(), jobId).run();
@@ -219,12 +220,10 @@ async function handleJobs(request, env, url, origin) {
   if (request.method === 'GET' && downloadMatch) {
     const [, jobId, fileIndexText] = downloadMatch;
     if (!(await authorizedJob(request, env, jobId))) return json({ ok: false, error: 'JOB_NOT_FOUND' }, 404, origin);
-    const file = await env.DB.prepare('SELECT name, output_key, status FROM job_files WHERE job_id = ? AND file_index = ?').bind(jobId, Number(fileIndexText)).first();
-    if (!file || file.status !== 'completed' || !file.output_key) return json({ ok: false, error: 'OUTPUT_NOT_READY' }, 409, origin);
-    const object = await env.MEDIA.get(file.output_key);
-    if (!object) return json({ ok: false, error: 'OUTPUT_MISSING' }, 404, origin);
+    const file = await env.DB.prepare('SELECT name, output_srt, status FROM job_files WHERE job_id = ? AND file_index = ?').bind(jobId, Number(fileIndexText)).first();
+    if (!file || file.status !== 'completed' || !file.output_srt) return json({ ok: false, error: 'OUTPUT_NOT_READY' }, 409, origin);
     const safeName = String(file.name).replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_') + '.srt';
-    return new Response(object.body, { headers: { ...corsHeaders(origin), 'content-type': 'application/x-subrip; charset=utf-8', 'content-disposition': 'attachment; filename="' + safeName + '"', 'cache-control': 'no-store' } });
+    return new Response(file.output_srt, { headers: { ...corsHeaders(origin), 'content-type': 'application/x-subrip; charset=utf-8', 'content-disposition': 'attachment; filename="' + safeName + '"', 'cache-control': 'no-store' } });
   }
   const jobMatch = path.match(/^\/jobs\/([0-9a-f-]+)$/i);
   if (request.method === 'GET' && (path === '/jobs' || jobMatch)) {
@@ -274,9 +273,8 @@ async function processJobQueueMessage(message, env) {
     const chunk = await env.DB.prepare('SELECT * FROM job_chunks WHERE job_id = ? AND file_index = ? AND chunk_index = ?').bind(jobId, fileIndex, chunkIndex).first();
     if (!chunk || chunk.status === 'done') return;
     await env.DB.prepare('UPDATE job_chunks SET status = ? WHERE job_id = ? AND file_index = ? AND chunk_index = ?').bind('processing', jobId, fileIndex, chunkIndex).run();
-    const object = await env.MEDIA.get(chunk.r2_key);
-    if (!object) throw new Error('Queued audio chunk is missing from storage.');
-    const bytes = await object.arrayBuffer();
+    if (!chunk.audio_blob) throw new Error('Queued audio chunk is missing from D1 storage.');
+    const bytes = chunk.audio_blob instanceof ArrayBuffer ? new Uint8Array(chunk.audio_blob) : new Uint8Array(chunk.audio_blob);
     let result;
     if (job.transcription_provider === 'cloudflare') {
       const audio = Buffer.from(bytes).toString('base64');
@@ -290,7 +288,7 @@ async function processJobQueueMessage(message, env) {
       if (Array.isArray(segment.words) && segment.words.length) return segment.words.map(word => ({ start: Number(word.start), end: Number(word.end), text: String(word.word || word.text || '') })).filter(w => w.text && Number.isFinite(w.start) && Number.isFinite(w.end));
       return segment.text && Number.isFinite(segment.start) && Number.isFinite(segment.end) ? [{ start: Number(segment.start), end: Number(segment.end), text: String(segment.text) }] : [];
     });
-    await env.DB.prepare('UPDATE job_chunks SET status = ?, result_json = ?, error = NULL WHERE job_id = ? AND file_index = ? AND chunk_index = ?')
+    await env.DB.prepare('UPDATE job_chunks SET status = ?, result_json = ?, audio_blob = NULL, error = NULL WHERE job_id = ? AND file_index = ? AND chunk_index = ?')
       .bind('done', JSON.stringify({ text: result?.text || '', segments }), jobId, fileIndex, chunkIndex).run();
     const count = await env.DB.prepare('SELECT COUNT(*) AS completed FROM job_chunks WHERE job_id = ? AND file_index = ? AND status = ?').bind(jobId, fileIndex, 'done').first();
     if ((count?.completed || 0) >= file.chunk_count) await env.JOBS_QUEUE.send({ type: 'finalize', jobId, fileIndex });
@@ -329,9 +327,7 @@ async function processJobQueueMessage(message, env) {
       }
     }
     const srt = cues.map((cue, i) => (i + 1) + '\n' + cue.start + ' --> ' + cue.end + '\n' + cue.text.trim()).join('\n\n') + '\n';
-    const outputKey = JOB_PREFIX + jobId + '/' + fileIndex + '/output.srt';
-    await env.MEDIA.put(outputKey, srt, { httpMetadata: { contentType: 'application/x-subrip; charset=utf-8' } });
-    await env.DB.prepare('UPDATE job_files SET status = ?, output_key = ?, error = NULL WHERE job_id = ? AND file_index = ?').bind('completed', outputKey, jobId, fileIndex).run();
+    await env.DB.prepare('UPDATE job_files SET status = ?, output_srt = ?, error = NULL WHERE job_id = ? AND file_index = ?').bind('completed', srt, jobId, fileIndex).run();
     const states = await env.DB.prepare('SELECT status FROM job_files WHERE job_id = ?').bind(jobId).all();
     const allDone = (states.results || []).every(row => ['completed', 'failed'].includes(row.status));
     if (allDone) {
@@ -357,7 +353,7 @@ export default {
           deepgram:{available:!!env.DEEPGRAM_API_KEY, tasks:["transcribe"]},
           cloudflareTranslation:{available:!!env.AI, model:TRANSLATION_MODEL}
         },
-        backgroundJobs:{available:!!env.DB && !!env.MEDIA && !!env.JOBS_QUEUE, storage:!!env.MEDIA, queue:!!env.JOBS_QUEUE}
+        backgroundJobs:{available:!!env.DB && !!env.JOBS_QUEUE, storage:'D1', queue:!!env.JOBS_QUEUE}
       },200,origin);
     }
     if (request.method === "POST" && url.pathname === "/translate") {
@@ -449,12 +445,6 @@ export default {
     const cutoff = now() - 30 * 24 * 60 * 60;
     const expired = await env.DB.prepare('SELECT id FROM jobs WHERE created_at < ? LIMIT 25').bind(cutoff).all();
     for (const row of expired.results || []) {
-      let cursor;
-      do {
-        const listed = await env.MEDIA.list({ prefix: JOB_PREFIX + row.id + '/', limit: 1000, cursor });
-        if (listed.objects?.length) await env.MEDIA.delete(listed.objects.map(object => object.key));
-        cursor = listed.truncated ? listed.cursor : undefined;
-      } while (cursor);
       await env.DB.prepare('DELETE FROM job_chunks WHERE job_id = ?').bind(row.id).run();
       await env.DB.prepare('DELETE FROM job_files WHERE job_id = ?').bind(row.id).run();
       await env.DB.prepare('DELETE FROM jobs WHERE id = ?').bind(row.id).run();
