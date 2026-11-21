@@ -228,34 +228,66 @@ async function handleJobs(request, env, url, origin) {
   const jobMatch = path.match(/^\/jobs\/([0-9a-f-]+)$/i);
   if (request.method === 'GET' && (path === '/jobs' || jobMatch)) {
     try {
-      let jobs;
       if (jobMatch) {
         const id = jobMatch[1];
         if (!(await authorizedJob(request, env, id))) return json({ ok: false, error: 'JOB_NOT_FOUND' }, 404, origin);
-        const job = await env.DB.prepare('SELECT id, status, source_language AS sourceLanguage, transcription_provider AS provider, translation_provider AS translationProvider, target_language AS targetLanguage, created_at AS createdAt, updated_at AS updatedAt FROM jobs WHERE id = ?').bind(id).first();
-        const files = await env.DB.prepare('SELECT file_index AS fileIndex, name, duration, chunk_count AS chunkCount, status, error FROM job_files WHERE job_id = ? ORDER BY file_index').bind(id).all();
-        const enriched = [];
-        for (const file of files.results || []) {
-          const counts = await env.DB.prepare('SELECT COUNT(*) AS total, SUM(CASE WHEN status = "done" THEN 1 ELSE 0 END) AS completed FROM job_chunks WHERE job_id = ? AND file_index = ?').bind(id, file.fileIndex).first();
-          enriched.push({ ...file, chunksCompleted: counts?.completed || 0, chunksTotal: file.chunkCount });
-        }
-        return json({ ok: true, job: { ...job, files: enriched } }, 200, origin);
+        const rows = await env.DB.prepare(`
+          SELECT j.id, j.status, j.source_language AS sourceLanguage,
+            j.transcription_provider AS provider, j.translation_provider AS translationProvider,
+            j.target_language AS targetLanguage, j.created_at AS createdAt, j.updated_at AS updatedAt,
+            f.file_index AS fileIndex, f.name, f.duration, f.chunk_count AS chunkCount,
+            f.status AS fileStatus, f.error,
+            COALESCE(SUM(CASE WHEN c.status = 'done' THEN 1 ELSE 0 END), 0) AS chunksCompleted
+          FROM jobs j
+          LEFT JOIN job_files f ON f.job_id = j.id
+          LEFT JOIN job_chunks c ON c.job_id = f.job_id AND c.file_index = f.file_index
+          WHERE j.id = ?
+          GROUP BY j.id, f.file_index
+          ORDER BY f.file_index
+        `).bind(id).all();
+        const first = rows.results?.[0];
+        if (!first) return json({ ok: false, error: 'JOB_NOT_FOUND' }, 404, origin);
+        const files = (rows.results || []).filter(row => row.fileIndex !== null).map(row => ({
+          fileIndex: row.fileIndex, name: row.name, duration: row.duration,
+          chunkCount: row.chunkCount, status: row.fileStatus, error: row.error,
+          chunksCompleted: row.chunksCompleted || 0, chunksTotal: row.chunkCount
+        }));
+        return json({ ok: true, job: {
+          id: first.id, status: first.status, sourceLanguage: first.sourceLanguage,
+          provider: first.provider, translationProvider: first.translationProvider,
+          targetLanguage: first.targetLanguage, createdAt: first.createdAt,
+          updatedAt: first.updatedAt, files
+        } }, 200, origin);
       }
       const token = bearer(request);
       if (token.length < 24) return json({ ok: false, error: 'CLIENT_KEY_REQUIRED' }, 401, origin);
       const owner = await tokenHash(token);
-      jobs = await env.DB.prepare('SELECT id, status, created_at AS createdAt, updated_at AS updatedAt FROM jobs WHERE owner_hash = ? ORDER BY created_at DESC LIMIT 50').bind(owner).all();
-      const result = [];
-      for (const job of jobs.results || []) {
-        const files = await env.DB.prepare('SELECT file_index AS fileIndex, name, duration, chunk_count AS chunkCount, status, error FROM job_files WHERE job_id = ? ORDER BY file_index').bind(job.id).all();
-        const enriched = [];
-        for (const file of files.results || []) {
-          const counts = await env.DB.prepare('SELECT SUM(CASE WHEN status = "done" THEN 1 ELSE 0 END) AS completed FROM job_chunks WHERE job_id = ? AND file_index = ?').bind(job.id, file.fileIndex).first();
-          enriched.push({ ...file, chunksCompleted: counts?.completed || 0, chunksTotal: file.chunkCount });
-        }
-        result.push({ ...job, files: enriched });
+      const rows = await env.DB.prepare(`
+        SELECT j.id, j.status, j.created_at AS createdAt, j.updated_at AS updatedAt,
+          f.file_index AS fileIndex, f.name, f.duration, f.chunk_count AS chunkCount,
+          f.status AS fileStatus, f.error,
+          COALESCE(SUM(CASE WHEN c.status = 'done' THEN 1 ELSE 0 END), 0) AS chunksCompleted
+        FROM jobs j
+        LEFT JOIN job_files f ON f.job_id = j.id
+        LEFT JOIN job_chunks c ON c.job_id = f.job_id AND c.file_index = f.file_index
+        WHERE j.owner_hash = ?
+        GROUP BY j.id, f.file_index
+        ORDER BY j.created_at DESC, f.file_index
+        LIMIT 250
+      `).bind(owner).all();
+      const byJob = new Map();
+      for (const row of rows.results || []) {
+        if (!byJob.has(row.id)) byJob.set(row.id, {
+          id: row.id, status: row.status, createdAt: row.createdAt,
+          updatedAt: row.updatedAt, files: []
+        });
+        if (row.fileIndex !== null) byJob.get(row.id).files.push({
+          fileIndex: row.fileIndex, name: row.name, duration: row.duration,
+          chunkCount: row.chunkCount, status: row.fileStatus, error: row.error,
+          chunksCompleted: row.chunksCompleted || 0, chunksTotal: row.chunkCount
+        });
       }
-      return json({ ok: true, jobs: result }, 200, origin);
+      return json({ ok: true, jobs: Array.from(byJob.values()).slice(0, 50) }, 200, origin);
     } catch (error) {
       return json({ ok: false, error: 'JOB_READ_FAILED', message: errorMessage(error) }, 500, origin);
     }
@@ -444,11 +476,13 @@ export default {
   async scheduled(controller, env) {
     const cutoff = now() - 30 * 24 * 60 * 60;
     const expired = await env.DB.prepare('SELECT id FROM jobs WHERE created_at < ? LIMIT 25').bind(cutoff).all();
+    const deletes = [];
     for (const row of expired.results || []) {
-      await env.DB.prepare('DELETE FROM job_chunks WHERE job_id = ?').bind(row.id).run();
-      await env.DB.prepare('DELETE FROM job_files WHERE job_id = ?').bind(row.id).run();
-      await env.DB.prepare('DELETE FROM jobs WHERE id = ?').bind(row.id).run();
+      deletes.push(env.DB.prepare('DELETE FROM job_chunks WHERE job_id = ?').bind(row.id));
+      deletes.push(env.DB.prepare('DELETE FROM job_files WHERE job_id = ?').bind(row.id));
+      deletes.push(env.DB.prepare('DELETE FROM jobs WHERE id = ?').bind(row.id));
     }
+    if (deletes.length) await env.DB.batch(deletes);
   },
   async queue(batch, env) {
     for (const message of batch.messages) {
