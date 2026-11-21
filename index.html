@@ -92,7 +92,10 @@ async function transcribe(job){
   let health;try{health=await fetch(base+'/health',{method:'GET'});}catch(e){throw Error('WORKER_CONNECTION_FAILED: Could not reach the transcription service. Check its URL and deployment. '+e.message)}
   if(!health.ok)throw Error('WORKER_HEALTH_FAILED: Service returned HTTP '+health.status+'.');
   const healthData=await health.json();if(!healthData.ok)throw Error('WORKER_HEALTH_INVALID: '+JSON.stringify(healthData));
-  diag('WORKER CONNECTED: '+(healthData.model||'Whisper'));\n  const selectedProvider=$('aiProvider').value;\n  if(!healthData.providers?.[selectedProvider]?.available)throw Error(selectedProvider.toUpperCase()+'_NOT_CONFIGURED: This provider is not connected yet. Add its API key as a Cloudflare Worker secret, then retry.');\n  if($('translate').checked){const tp=$('translationProvider').value;const key=tp==='cloudflare'?'cloudflareTranslation':tp;if(!healthData.providers?.[key]?.available)throw Error(tp.toUpperCase()+'_NOT_CONFIGURED: The selected translation provider is not connected.');}
+  diag('WORKER CONNECTED: '+(healthData.model||'Whisper'));
+  const selectedProvider=$('aiProvider').value;
+  if(!healthData.providers?.[selectedProvider]?.available)throw Error(selectedProvider.toUpperCase()+'_NOT_CONFIGURED: This provider is not connected yet. Add its API key as a Cloudflare Worker secret, then retry.');
+  if($('translate').checked){const tp=$('translationProvider').value;const key=tp==='cloudflare'?'cloudflareTranslation':tp;if(!healthData.providers?.[key]?.available)throw Error(tp.toUpperCase()+'_NOT_CONFIGURED: The selected translation provider is not connected.');}
   job.stage='splitting MP3 at valid frame boundaries';
   const parsed=await mp3Chunks(job.file),out=[];
   diag('MP3 READY: '+job.file.name+' · '+parsed.totalDuration.toFixed(1)+' seconds · '+parsed.chunks.length+' valid audio chunks');
