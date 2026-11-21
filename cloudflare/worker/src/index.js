@@ -356,7 +356,8 @@ export default {
           gemini:{available:!!env.GEMINI_API_KEY, tasks:["transcribe","translate","text-translation"]},
           deepgram:{available:!!env.DEEPGRAM_API_KEY, tasks:["transcribe"]},
           cloudflareTranslation:{available:!!env.AI, model:TRANSLATION_MODEL}
-        }
+        },
+        backgroundJobs:{available:!!env.DB && !!env.MEDIA && !!env.JOBS_QUEUE, storage:!!env.MEDIA, queue:!!env.JOBS_QUEUE}
       },200,origin);
     }
     if (request.method === "POST" && url.pathname === "/translate") {
@@ -443,6 +444,21 @@ export default {
       });
       return json({ok:true,text:result?.text||"",segments:timedWords,vtt:result?.vtt||"",wordCount:result?.word_count||0,provider},200,origin);
     } catch(error) { return json({ok:false,error:"TRANSCRIPTION_FAILED",message:errorMessage(error)},502,origin); }
+  },
+  async scheduled(controller, env) {
+    const cutoff = now() - 30 * 24 * 60 * 60;
+    const expired = await env.DB.prepare('SELECT id FROM jobs WHERE created_at < ? LIMIT 25').bind(cutoff).all();
+    for (const row of expired.results || []) {
+      let cursor;
+      do {
+        const listed = await env.MEDIA.list({ prefix: JOB_PREFIX + row.id + '/', limit: 1000, cursor });
+        if (listed.objects?.length) await env.MEDIA.delete(listed.objects.map(object => object.key));
+        cursor = listed.truncated ? listed.cursor : undefined;
+      } while (cursor);
+      await env.DB.prepare('DELETE FROM job_chunks WHERE job_id = ?').bind(row.id).run();
+      await env.DB.prepare('DELETE FROM job_files WHERE job_id = ?').bind(row.id).run();
+      await env.DB.prepare('DELETE FROM jobs WHERE id = ?').bind(row.id).run();
+    }
   },
   async queue(batch, env) {
     for (const message of batch.messages) {
