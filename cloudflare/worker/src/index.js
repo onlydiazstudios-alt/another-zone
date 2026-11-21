@@ -267,13 +267,10 @@ async function handleJobs(request, env, url, origin) {
   }
   const jobMatch = path.match(/^\/jobs\/([0-9a-f-]+)$/i);
   if (request.method === 'GET' && (path === '/jobs' || jobMatch)) {
-    let readStage = 'start';
     try {
       if (jobMatch) {
-        readStage = 'authorize-job';
         const id = jobMatch[1];
         if (!(await authorizedJob(request, env, id))) return json({ ok: false, error: 'JOB_NOT_FOUND' }, 404, origin);
-        readStage = 'read-job-and-files';
         const rows = await env.DB.prepare(`
           SELECT j.id, j.status, j.source_language AS sourceLanguage,
             j.transcription_provider AS provider, j.translation_provider AS translationProvider,
@@ -302,7 +299,6 @@ async function handleJobs(request, env, url, origin) {
           updatedAt: first.updatedAt, files
         } }, 200, origin);
       }
-      readStage = 'read-job-list';
       const token = bearer(request);
       if (token.length < 24) return json({ ok: false, error: 'CLIENT_KEY_REQUIRED' }, 401, origin);
       const owner = await tokenHash(token);
@@ -333,7 +329,7 @@ async function handleJobs(request, env, url, origin) {
       }
       return json({ ok: true, jobs: Array.from(byJob.values()).slice(0, 50) }, 200, origin);
     } catch (error) {
-      console.error('Background job read failed', { readStage, hasDbBinding: !!env.DB }, error);
+      console.error('Background job read failed', error);
       return json({ ok: false, error: 'JOB_READ_FAILED', message: errorMessage(error) }, 500, origin);
     }
   }
