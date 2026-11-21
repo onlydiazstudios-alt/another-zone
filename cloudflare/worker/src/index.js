@@ -63,12 +63,13 @@ const LANGUAGE_NAMES = {
   en:"english",fr:"french",es:"spanish",pt:"portuguese",de:"german",it:"italian",ja:"japanese",ko:"korean",
   zh:"chinese",ar:"arabic",hi:"hindi",yo:"yoruba",ha:"hausa",ig:"igbo",sw:"swahili",ru:"russian",tr:"turkish"
 };
-async function translateText(text, provider, env, targetLanguage) {
+async function translateText(text, provider, env, targetLanguage, sourceLanguage) {
   if (!text) return "";
   if (provider === "cloudflare") {
     if (!env.AI) throw new Error("AI_BINDING_MISSING: Workers AI binding named AI is not configured.");
     const target = LANGUAGE_NAMES[targetLanguage] || targetLanguage;
-    const result = await env.AI.run(TRANSLATION_MODEL, { text, source_lang: "english", target_lang: target });
+    const source = LANGUAGE_NAMES[sourceLanguage] || sourceLanguage || "english";
+    const result = await env.AI.run(TRANSLATION_MODEL, { text, source_lang: source, target_lang: target });
     return result?.translated_text || result?.text || "";
   }
   if (provider === "gemini") {
@@ -117,8 +118,9 @@ export default {
         if (!items.length || items.length > 500) return json({ok:false,error:"INVALID_ITEMS",message:"Send between 1 and 500 subtitle lines."},400,origin);
         const provider = ["cloudflare","gemini","openai"].includes(body.provider) ? body.provider : "cloudflare";
         const target = String(body.targetLanguage || "English").slice(0,50);
+        const source = String(body.sourceLanguage || "English").slice(0,50);
         const translated = [];
-        for (const item of items) translated.push(await translateText(String(item || "").slice(0,4000),provider,env,target));
+        for (const item of items) translated.push(await translateText(String(item || "").slice(0,4000),provider,env,target,source));
         return json({ok:true,translated,provider},200,origin);
       } catch(error) { return json({ok:false,error:"TRANSLATION_FAILED",message:errorMessage(error)},502,origin); }
     }
