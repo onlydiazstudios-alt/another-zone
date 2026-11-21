@@ -1,4 +1,4 @@
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 
 const account = process.env.CLOUDFLARE_ACCOUNT_ID;
 const token = process.env.CLOUDFLARE_API_TOKEN;
@@ -15,36 +15,25 @@ async function api(path, method = 'GET', body) {
 const d1List = await api('/accounts/' + account + '/d1/database');
 let database = (d1List || []).find(item => item.name === 'another-zone-srt-jobs');
 if (!database) database = await api('/accounts/' + account + '/d1/database', 'POST', { name: 'another-zone-srt-jobs' });
+const databaseId = database.uuid || database.id;
+if (!databaseId) throw new Error('Cloudflare created or found the D1 database but did not return its database ID.');
+
 const queueList = await api('/accounts/' + account + '/queues');
 const queues = queueList?.queues || queueList || [];
 let queue = queues.find(item => item.queue_name === 'another-zone-srt-jobs');
 if (!queue) queue = await api('/accounts/' + account + '/queues', 'POST', { queue_name: 'another-zone-srt-jobs' });
-const config = `name = "another-zone-srt-ai"
-main = "src/index.js"
-compatibility_date = "2026-11-20"
-compatibility_flags = ["nodejs_compat"]
 
-[ai]
-binding = "AI"
-
-[[d1_databases]]
-binding = "DB"
-database_name = "another-zone-srt-jobs"
-database_id = "${database.uuid || database.id}"
-
-[[queues.producers]]
-binding = "JOBS_QUEUE"
-queue = "another-zone-srt-jobs"
-
-[[queues.consumers]]
-queue = "another-zone-srt-jobs"
-max_batch_size = 1
-max_batch_timeout = 1
-max_retries = 5
-max_concurrency = 2
-
-[triggers]
-crons = ["0 3 * * *"]
-`;
-await writeFile(new URL('./wrangler.toml', import.meta.url), config);
-console.log('Cloudflare D1 and Queue resources are ready; wrangler.toml generated.');
+// Keep the DB and Queue bindings in the committed Wrangler configuration.
+// Only the account-specific D1 identifier is injected during deployment.
+const configPath = new URL('./wrangler.toml', import.meta.url);
+const template = await readFile(configPath, 'utf8');
+if (!template.includes('binding = "DB"') || !template.includes('database_id = "__D1_DATABASE_ID__"')) {
+  throw new Error('wrangler.toml must declare the DB D1 binding and its database ID placeholder.');
+}
+if (!template.includes('binding = "JOBS_QUEUE"')) {
+  throw new Error('wrangler.toml must declare the JOBS_QUEUE producer binding.');
+}
+const config = template.replace('database_id = "__D1_DATABASE_ID__"', 'database_id = "' + databaseId + '"');
+if (config.includes('__D1_DATABASE_ID__')) throw new Error('D1 database ID placeholder was not fully replaced.');
+await writeFile(configPath, config);
+console.log('Cloudflare D1 and Queue bindings verified in wrangler.toml; database ID injected for deployment.');
