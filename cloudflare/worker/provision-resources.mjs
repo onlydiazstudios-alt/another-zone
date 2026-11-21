@@ -19,11 +19,6 @@ const queueList = await api('/accounts/' + account + '/queues');
 const queues = queueList?.queues || queueList || [];
 let queue = queues.find(item => item.queue_name === 'another-zone-srt-jobs');
 if (!queue) queue = await api('/accounts/' + account + '/queues', 'POST', { queue_name: 'another-zone-srt-jobs' });
-const bucketList = await api('/accounts/' + account + '/r2/buckets');
-const buckets = bucketList?.buckets || bucketList || [];
-if (!buckets.some(item => item.name === 'another-zone-srt-media')) {
-  await api('/accounts/' + account + '/r2/buckets', 'POST', { name: 'another-zone-srt-media' });
-}
 const config = `name = "another-zone-srt-ai"
 main = "src/index.js"
 compatibility_date = "2026-11-20"
@@ -36,10 +31,6 @@ binding = "AI"
 binding = "DB"
 database_name = "another-zone-srt-jobs"
 database_id = "${database.uuid || database.id}"
-
-[[r2_buckets]]
-binding = "MEDIA"
-bucket_name = "another-zone-srt-media"
 
 [[queues.producers]]
 binding = "JOBS_QUEUE"
@@ -56,4 +47,4 @@ max_concurrency = 2
 crons = ["0 3 * * *"]
 `;
 await writeFile(new URL('./wrangler.toml', import.meta.url), config);
-console.log('Cloudflare D1, R2 and Queue resources are ready; wrangler.toml generated.');
+console.log('Cloudflare D1 and Queue resources are ready; wrangler.toml generated.');
