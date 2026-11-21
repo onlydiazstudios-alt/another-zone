@@ -220,16 +220,25 @@ async function handleJobs(request, env, url, origin) {
   if (request.method === 'POST' && completeMatch) {
     const jobId = completeMatch[1];
     if (!(await authorizedJob(request, env, jobId))) return json({ ok: false, error: 'JOB_NOT_FOUND' }, 404, origin);
-    await env.DB.prepare('UPDATE job_files SET status = CASE WHEN status = ? THEN ? ELSE ? END WHERE job_id = ?')
-      .bind('completed', 'completed', 'processing', jobId).run();
-    await env.DB.prepare('UPDATE jobs SET status = CASE WHEN status = ? THEN ? ELSE ? END, updated_at = ? WHERE id = ?')
-      .bind('completed', 'completed', 'processing', now(), jobId).run();
+    const incomplete = await env.DB.prepare(`
+      SELECT f.file_index FROM job_files f
+      LEFT JOIN job_chunks c ON c.job_id = f.job_id AND c.file_index = f.file_index
+      WHERE f.job_id = ?
+      GROUP BY f.file_index
+      HAVING COUNT(c.chunk_index) < f.chunk_count
+    `).bind(jobId).all();
+    if ((incomplete.results || []).length) return json({ ok: false, error: 'UPLOAD_INCOMPLETE', message: 'Some audio segments have not arrived yet.' }, 409, origin);
+    await env.DB.prepare('UPDATE job_files SET status = CASE WHEN status IN (?, ?) THEN status ELSE ? END WHERE job_id = ?')
+      .bind('completed', 'failed', 'processing', jobId).run();
+    await env.DB.prepare('UPDATE jobs SET status = CASE WHEN status IN (?, ?) THEN status ELSE ? END, updated_at = ? WHERE id = ?')
+      .bind('completed', 'completed_with_errors', 'processing', now(), jobId).run();
     return json({ ok: true, status: 'processing' }, 200, origin);
   }
   const abortMatch = path.match(/^\/jobs\/([0-9a-f-]+)\/abort$/i);
   if (request.method === 'POST' && abortMatch) {
     const jobId = abortMatch[1];
     if (!(await authorizedJob(request, env, jobId))) return json({ ok: false, error: 'JOB_NOT_FOUND' }, 404, origin);
+    await env.DB.prepare('DELETE FROM job_chunks WHERE job_id = ?').bind(jobId).run();
     await env.DB.prepare('UPDATE job_files SET status = ?, error = ? WHERE job_id = ? AND status != ?')
       .bind('failed', 'Audio upload did not finish. Start a new upload to retry.', jobId, 'completed').run();
     await env.DB.prepare('UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?')
