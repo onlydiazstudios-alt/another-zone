@@ -1,45 +1,49 @@
 # Another Zone SRT Studio — AI providers
 
-The Worker exposes a single API for transcription and subtitle translation.
+The Cloudflare Worker provides transcription and subtitle translation for the SRT Studio frontend and AppDeploy edition.
 
 ## Transcription providers
 
-- `cloudflare` — Cloudflare Workers AI, using `@cf/openai/whisper-large-v3-turbo`. Uses the existing `AI` binding and needs no third-party API key.
-- `gemini` — Google Gemini audio transcription. Requires the `GEMINI_API_KEY` Worker secret.
-- `openai` — OpenAI Audio API using the current `gpt-transcribe` model. Requires the `OPENAI_API_KEY` Worker secret. OpenAI API usage is billed separately from ChatGPT subscriptions.
+- `cloudflare` — Cloudflare Workers AI using `@cf/openai/whisper-large-v3-turbo`. Uses the existing `AI` binding.
+- `gemini` — Google Gemini `gemini-3.5-transcribe` audio transcription. Requires the `GEMINI_API_KEY` Worker secret.
+- `deepgram` — Deepgram Nova-3 multilingual speech recognition. Requires the `DEEPGRAM_API_KEY` Worker secret.
 
-Send the selected provider in `X-AI-Provider` on `POST /transcribe-chunk`. If omitted, the Worker defaults to Cloudflare Whisper for backwards compatibility.
+Send the selected provider in `X-AI-Provider` to `POST /transcribe-chunk`. If omitted, Cloudflare Whisper is used for backwards compatibility.
 
 ## Translation providers
 
-- `cloudflare` — Cloudflare Workers AI Meta M2M100 translation model. Uses the existing `AI` binding.
-- `gemini` — Gemini text translation; requires `GEMINI_API_KEY`.
-- `openai` — OpenAI GPT translation; requires `OPENAI_API_KEY`.
+- `cloudflare` — Meta M2M100-1.2B hosted on Workers AI. Uses the existing `AI` binding.
+- `gemini` — Google Gemini `gemini-3.5-flash-lite` text translation. Requires `GEMINI_API_KEY`.
 
 Send `POST /translate` with JSON:
 
 ```json
 {
   "provider": "cloudflare",
-  "targetLanguage": "French",
-  "items": ["First subtitle line", "Second subtitle line"]
+  "sourceLanguage": "French",
+  "targetLanguage": "English",
+  "items": ["Bonjour tout le monde."]
 }
 ```
 
-The response returns one translated string per input item, preserving the cue order.
+The response returns one translated string per input item in the original order.
 
-## Required secrets
+## Required Worker secrets
 
-Add secrets to the Cloudflare Worker named `another-zone-srt-ai`:
+On the Cloudflare Worker named `another-zone-srt-ai`, add:
 
-- `GEMINI_API_KEY` — optional, enables Gemini.
-- `OPENAI_API_KEY` — optional, enables OpenAI GPT.
+- `GEMINI_API_KEY` — enables Gemini transcription and translation.
+- `DEEPGRAM_API_KEY` — enables Deepgram Nova-3 transcription.
 
-Do not put API keys in frontend code, GitHub files, or chat messages. The Worker `GET /health` response reports provider availability without exposing secret values.
+Add each through Cloudflare's Worker Settings → Variables and Secrets as a Secret. Never put keys in frontend code, GitHub files, chat messages, or ordinary plaintext variables.
 
-## Notes
+The `GET /health` response reports which providers are configured without exposing secret values.
 
-- Existing clients that do not send `X-AI-Provider` continue to use Cloudflare Whisper.
-- Provider/API availability and free quotas vary. Gemini and OpenAI API usage is subject to the respective provider's API terms, quotas, and pricing; ChatGPT or Gemini consumer subscriptions do not automatically include API usage.
-- M2M100 language coverage is model-specific; verify the selected target language for the chosen provider.
-- Gemini and OpenAI transcription responses currently return text without word-level timestamps. The frontend uses the available chunk-level timing fallback for these providers. Whisper remains the preferred option when timestamp quality is important.
+## Important operating notes
+
+- Existing clients that omit `X-AI-Provider` continue using Cloudflare Whisper.
+- Deepgram Nova-3 and Gemini API use their own account quotas and pricing. A free tier or introductory credit is not a promise of unlimited free use.
+- Cloudflare Workers AI usage is subject to Cloudflare's account limits and pricing.
+- The M2M100 language list is model-specific. Verify support for the chosen source/target language.
+- Deepgram returns word timestamps; Gemini and Whisper timestamp support varies by model response. The SRT Studio currently estimates cue timing when a provider does not return usable alignment data.
+- OpenAI is intentionally not included in this provider lineup.
