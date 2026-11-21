@@ -174,7 +174,18 @@ export default {
       } else if (provider === "gemini") result = await transcribeGemini(bytes,env,task);
       else if (provider === "deepgram") result = await transcribeDeepgram(bytes,env,request.headers.get("X-Source-Language") || "Auto-detect");
       else return json({ok:false,error:"PROVIDER_NOT_SUPPORTED",message:"Choose Cloudflare Whisper, Gemini, or Deepgram."},400,origin);
-      return json({ok:true,text:result?.text||"",segments:Array.isArray(result?.segments)?result.segments:[],vtt:result?.vtt||"",wordCount:result?.word_count||0,provider},200,origin);
+      const rawSegments = Array.isArray(result?.segments) ? result.segments : [];
+      const timedWords = rawSegments.flatMap(segment => {
+        if (Array.isArray(segment.words) && segment.words.length) {
+          return segment.words.map(word => ({
+            start: Number(word.start), end: Number(word.end), text: String(word.word || word.text || "")
+          })).filter(word => word.text && Number.isFinite(word.start) && Number.isFinite(word.end));
+        }
+        return segment.text && Number.isFinite(segment.start) && Number.isFinite(segment.end)
+          ? [{ start: Number(segment.start), end: Number(segment.end), text: String(segment.text) }]
+          : [];
+      });
+      return json({ok:true,text:result?.text||"",segments:timedWords,vtt:result?.vtt||"",wordCount:result?.word_count||0,provider},200,origin);
     } catch(error) { return json({ok:false,error:"TRANSCRIPTION_FAILED",message:errorMessage(error)},502,origin); }
   }
 };
