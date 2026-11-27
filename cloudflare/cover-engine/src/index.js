@@ -94,7 +94,7 @@ async function generate(request, env, url) {
     const binary = atob(result.image);
     const imageBytes = Uint8Array.from(binary, c => c.charCodeAt(0));
     if (!imageBytes.byteLength || imageBytes.byteLength > MAX_UPLOAD_BYTES) {
-      throw new Error("Generated image exceeded the 8 MB storage limit.");
+      throw new Error("Generated image exceeded the 2 MB storage limit.");
     }
 
     const id = crypto.randomUUID();
@@ -135,7 +135,7 @@ async function upload(request, env, url) {
   const mime = type.split(";")[0].trim().toLowerCase();
   if (!allowed[mime]) return json({ ok: false, error: "UNSUPPORTED_IMAGE_TYPE", message: "Upload JPEG, PNG or WebP." }, 415);
   const data = new Uint8Array(await request.arrayBuffer());
-  if (!data.byteLength || data.byteLength > MAX_UPLOAD_BYTES) return json({ ok: false, error: "INVALID_IMAGE_SIZE", message: "Images must be smaller than 8 MB." }, 413);
+  if (!data.byteLength || data.byteLength > MAX_UPLOAD_BYTES) return json({ ok: false, error: "INVALID_IMAGE_SIZE", message: "Images must be 2 MB or smaller." }, 413);
   const key = "upload-" + today() + "-" + crypto.randomUUID() + "." + allowed[mime];
   await env.COVERS.put(key, data, {
     metadata: { contentType: mime, generatedAt: new Date().toISOString(), source: "user-upload" },
