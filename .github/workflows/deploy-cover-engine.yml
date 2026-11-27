@@ -1,0 +1,58 @@
+name: Deploy AZ Product Cover Engine
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cloudflare/cover-engine/**"
+      - ".github/workflows/deploy-cover-engine.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Wrangler
+        run: npm install --global wrangler
+
+      - name: Create or reuse Workers KV namespace
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "Missing existing Cloudflare GitHub Actions secrets."
+            exit 1
+          fi
+          API="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces"
+          LIST="$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" "${API}")"
+          KV_ID="$(printf '%s' "$LIST" | jq -r '.result[]? | select(.title == "AZ_PRODUCT_COVERS") | .id' | head -n 1)"
+          if [ -z "$KV_ID" ]; then
+            CREATED="$(curl -fsS -X POST -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H "Content-Type: application/json" --data '{"title":"AZ_PRODUCT_COVERS"}' "${API}")"
+            KV_ID="$(printf '%s' "$CREATED" | jq -r '.result.id // empty')"
+          fi
+          if [ -z "$KV_ID" ]; then
+            echo "Could not create or find AZ_PRODUCT_COVERS. Check Workers KV Storage read/write permission on the Cloudflare token."
+            exit 1
+          fi
+          sed -i "s/__KV_NAMESPACE_ID__/${KV_ID}/" cloudflare/cover-engine/wrangler.toml
+          echo "Workers KV namespace is ready."
+
+      - name: Deploy Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: wrangler deploy --config cloudflare/cover-engine/wrangler.toml
