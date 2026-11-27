@@ -1,0 +1,11 @@
+name = "az-product-cover-engine"
+main = "src/index.js"
+compatibility_date = "2026-11-27"
+workers_dev = true
+
+[ai]
+binding = "AI"
+
+[[kv_namespaces]]
+binding = "COVERS"
+id = "__KV_NAMESPACE_ID__"
