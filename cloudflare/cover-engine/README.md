@@ -6,8 +6,8 @@ A standalone Cloudflare Worker that generates premium product-cover artwork and 
 
 - Image generation: Cloudflare Workers AI, `@cf/black-forest-labs/flux-1-schnell`.
 - Storage and public image delivery: Workers KV. The Worker serves the stored image from its own `workers.dev` URL, so no public R2 bucket or separate image-conversion service is needed.
-- Daily cap: 7 generated images per UTC day (5 for the daily product pipeline plus 2 spare).
-- Retention: generated and uploaded images expire after 100 days.
+- Daily cap: 7 total generated or uploaded images per UTC day (5 for the daily product pipeline plus 2 spare).
+- Retention: generated and uploaded images expire after 60 days to stay within the Workers KV free storage allowance.
 - Access: the generation/upload endpoints require a private service key. Public image URLs are read-only.
 - No paid image API is called.
 
@@ -37,7 +37,7 @@ The image URL is the Worker's public HTTPS route. No extra image-to-URL converte
 
 ## Security
 
-The Worker stores only the SHA-256 digest of the service key. The raw key belongs only in the private daily automation instructions or the Cover Studio UI; never commit it to this repository. The GET endpoint accepts the key in its query string for automation compatibility, so treat the key as a limited-use generation credential and do not share generated request URLs. The endpoint is capped at seven generated images per day.
+The Worker stores only the SHA-256 digest of the service key. The raw key belongs only in the private daily automation instructions or the Cover Studio UI; never commit it to this repository. The GET endpoint accepts the key in its query string for automation compatibility, so treat the key as a limited-use generation credential and do not share generated request URLs. The endpoint is capped at seven generated or uploaded images per day.
 
 ## Notes
 
