@@ -173,7 +173,7 @@ hr{border:0;border-top:1px solid #30253e;margin:26px 0}
 <button id="generate">Generate cover</button><div id="status"></div><img id="preview" alt="Generated cover preview">
 <div class="url"><input id="imageUrl" readonly placeholder="Your public image URL appears here"><button id="copy" type="button">Copy URL</button></div>
 <hr><label for="file">Or upload an existing JPEG, PNG or WebP</label><input id="file" type="file" accept="image/jpeg,image/png,image/webp"><button id="upload" type="button">Upload and create URL</button>
-<p class="muted">Free allowance: up to 7 generated images per UTC day. Stored image URLs expire after 100 days. Uploads do not use image-generation credits.</p>
+<p class="muted">Free allowance: up to 7 generated or uploaded images per UTC day. Stored image URLs expire after 60 days.</p>
 </section></main>
 <script>
 const $=id=>document.getElementById(id);let lastUrl='';
