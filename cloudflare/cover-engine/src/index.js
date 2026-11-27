@@ -1,8 +1,8 @@
 const MODEL = "@cf/black-forest-labs/flux-1-schnell";
 const API_KEY_SHA256 = "5c4e4423a5efb73dd3fe70be3ab425085fe199d3c5c38dcd7799f24017703e13";
 const DAILY_IMAGE_LIMIT = 7;
-const IMAGE_TTL_SECONDS = 100 * 24 * 60 * 60;
-const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+const IMAGE_TTL_SECONDS = 60 * 24 * 60 * 60;
+const MAX_UPLOAD_BYTES = 2 * 1024 * 1024;
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -113,7 +113,7 @@ async function generate(request, env, url) {
       image_url: imageUrl,
       generated_today: nextCount,
       remaining_today: DAILY_IMAGE_LIMIT - nextCount,
-      expires_after_days: 100
+      expires_after_days: 60
     }, 201);
   } catch (error) {
     return json({ ok: false, error: "IMAGE_GENERATION_FAILED", message: String(error?.message || error).slice(0, 500) }, 502);
@@ -123,6 +123,9 @@ async function generate(request, env, url) {
 async function upload(request, env, url) {
   if (!(await authorize(request, url))) return json({ ok: false, error: "UNAUTHORIZED" }, 401);
   if (!env.COVERS) return json({ ok: false, error: "KV_BINDING_MISSING" }, 503);
+  const date = today();
+  const count = await currentCount(env, date);
+  if (count >= DAILY_IMAGE_LIMIT) return json({ ok: false, error: "DAILY_FREE_LIMIT_REACHED", limit: DAILY_IMAGE_LIMIT, generated_today: count, resets_at_utc: "00:00 UTC" }, 429);
   const type = request.headers.get("Content-Type") || "";
   const allowed = {
     "image/jpeg": "jpg",
@@ -138,7 +141,9 @@ async function upload(request, env, url) {
     metadata: { contentType: mime, generatedAt: new Date().toISOString(), source: "user-upload" },
     expirationTtl: IMAGE_TTL_SECONDS
   });
-  return json({ ok: true, image_url: new URL("/image/" + key, request.url).toString(), key, expires_after_days: 100 }, 201);
+  const nextCount = count + 1;
+  await env.COVERS.put("quota:" + date, String(nextCount), { expirationTtl: 2 * 24 * 60 * 60 });
+  return json({ ok: true, image_url: new URL("/image/" + key, request.url).toString(), key, generated_today: nextCount, remaining_today: DAILY_IMAGE_LIMIT - nextCount, expires_after_days: 60 }, 201);
 }
 
 const HTML = `<!doctype html>
